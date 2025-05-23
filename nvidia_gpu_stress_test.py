@@ -94,7 +94,6 @@ def find_optimal_matrix_size(gpu_index: int, target_percent: float) -> tuple[int
 
     # Initialize NVML and get GPU info
     try:
-        pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
         info = pynvml.nvmlDeviceGetMemoryInfo(handle)
         total_memory = info.total / (1024**2)  # Convert to MB
@@ -873,10 +872,9 @@ def single_matrix_stress(stop_flag, target_percent, gpu_index, matrix_size_or_tu
     params = initial_params.copy()
 
     try:
-        pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
     except pynvml.NVMLError as e:
-        raise RuntimeError(f"Failed to initialize NVML: {str(e)}")
+        raise RuntimeError(f"Failed to get handle by index: {str(e)}")
 
     pid_controller = MultiVarPIDController(target_percent, matrix_size)
     smoother = LoadSmoothingController(pid_controller)
@@ -1019,6 +1017,10 @@ def single_matrix_stress_test(gpu_index: int, duration: int, target_percent: flo
     Returns:
         dict: Dictionary containing test results and metrics
     """
+    
+    # Use provided stop flag or create new one
+    stop_flag = shared_stop_flag if shared_stop_flag is not None else [False]
+    
     # Initialize metrics storage
     metrics = {
         'timestamps': [],
@@ -1029,9 +1031,6 @@ def single_matrix_stress_test(gpu_index: int, duration: int, target_percent: flo
         'power_values': [],
         'battery_stats': []
     }
-
-    # Use provided stop flag or create new one
-    stop_flag = shared_stop_flag if shared_stop_flag is not None else [False]
 
     # Initialize NVML and get handle
     handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
@@ -1266,14 +1265,12 @@ def matrix_stress(duration: int, target_percent: float, gpu_index: int = 0, log_
         Dict[int, dict]: Dictionary mapping GPU index to test metrics
     """
     # Setup logging
-    original_stdout = sys.stdout
     logger = Logger(log_file) if log_file else None
     if logger:
         sys.stdout = logger
 
     try:
         # Initialize NVML
-        pynvml.nvmlInit()
         device_count = pynvml.nvmlDeviceGetCount()
 
         # Validate GPU index
@@ -1298,23 +1295,13 @@ def matrix_stress(duration: int, target_percent: float, gpu_index: int = 0, log_
     except Exception as e:
         print(f"Error during stress test: {e}")
         return {}
-    finally:
-        # Cleanup
-        if logger:
-            sys.stdout = original_stdout
-            logger.close()
-        try:
-            pynvml.nvmlShutdown()
-        except:
-            pass
 
 
-def simple_stress(stop_flag: list, target_percent: float, gpu_index: int, duration: int) -> dict:
+def simple_stress(target_percent: float, gpu_index: int, duration: int) -> dict:
     """
     Simple GPU stress test using basic arithmetic operations with continuous load adjustment
     
     Args:
-        stop_flag (list): Flag to control the task execution
         target_percent (float): Target GPU usage percentage (1-100)
         gpu_index (int): Index of the GPU to stress test
         duration (int): Test duration in seconds
@@ -1335,10 +1322,9 @@ def simple_stress(stop_flag: list, target_percent: float, gpu_index: int, durati
 
     try:
         # Initialize NVML and get device handle
-        pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
     except pynvml.NVMLError as e:
-        raise RuntimeError(f"Failed to initialize NVML: {str(e)}")
+        raise RuntimeError(f"Failed to get handle by index: {str(e)}")
 
     # Initialize GPU test object
     gpu_test = SimpleGPUStressTest(gpu_index)
@@ -1361,7 +1347,8 @@ def simple_stress(stop_flag: list, target_percent: float, gpu_index: int, durati
     last_adjustment_time = time.time()
     adjustment_interval = 0.1
     
-    while not stop_flag[0]:
+    stop_flag = False
+    while not stop_flag:
         try:
             current_time = time.time()
             
@@ -1450,7 +1437,7 @@ def simple_stress(stop_flag: list, target_percent: float, gpu_index: int, durati
 
                 # Check if test duration has elapsed (only after stabilization)
                 if start_time is not None and (current_time - start_time) >= duration:
-                    stop_flag[0] = True
+                    stop_flag = True
                 
             except pynvml.NVMLError as e:
                 print(f"\nError reading GPU {gpu_index} metrics: {e}")
@@ -1510,8 +1497,8 @@ class SimpleGPUStressTest:
             device_id (int): GPU device ID
         """
         self.device_id = device_id
-        self.stream = cp.cuda.Stream()
         cp.cuda.Device(device_id).use()
+        self.stream = cp.cuda.Stream()
         
         # Initialize workload parameters
         self.current_elements = 10**7  # Initial workload size
@@ -1581,8 +1568,8 @@ class RayTracingStressTest:
     def __init__(self, device_id: int = 0):
         """Initialize ray tracing stress test"""
         self.device_id = device_id
-        self.stream = cp.cuda.Stream()
         cp.cuda.Device(device_id).use()
+        self.stream = cp.cuda.Stream()
         
         # Start with very small initial values
         self.width = 64        # Smaller initial resolution
@@ -1803,12 +1790,11 @@ class RayTracingStressTest:
         except Exception as e:
             print(f"Error during cleanup: {e}")
 
-def ray_tracing_stress(stop_flag: list, target_percent: float, gpu_index: int, duration: int) -> dict:
+def ray_tracing_stress(target_percent: float, gpu_index: int, duration: int) -> dict:
     """
     Ray tracing based GPU stress test with warm-up and test phases
     
     Args:
-        stop_flag (list): Flag to control the task execution
         target_percent (float): Target GPU usage percentage (1-100)
         gpu_index (int): Index of the GPU to stress test
         duration (int): Test duration in seconds (after warm-up)
@@ -1831,11 +1817,9 @@ def ray_tracing_stress(stop_flag: list, target_percent: float, gpu_index: int, d
     }
 
     try:
-        # Initialize NVML and get device handle
-        pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
     except pynvml.NVMLError as e:
-        raise RuntimeError(f"Failed to initialize NVML: {str(e)}")
+        raise RuntimeError(f"Failed to get handle by index: {str(e)}")
 
     # Initialize GPU test object
     gpu_test = RayTracingStressTest(gpu_index)
@@ -1858,7 +1842,8 @@ def ray_tracing_stress(stop_flag: list, target_percent: float, gpu_index: int, d
     print(f"Starting warm-up phase, targeting {target_percent}% GPU utilization...")
     
     try:
-        while not stop_flag[0]:
+        stop_flag = False
+        while not stop_flag:
             current_time = time.time()
             
             # Perform GPU computation based on current phase
@@ -1942,7 +1927,7 @@ def ray_tracing_stress(stop_flag: list, target_percent: float, gpu_index: int, d
 
                 # Check if test duration has elapsed
                 if start_time is not None and (current_time - start_time) >= duration:
-                    stop_flag[0] = True
+                    stop_flag = True
 
             except pynvml.NVMLError as e:
                 print(f"\nError reading GPU {gpu_index} metrics: {e}")
@@ -2012,6 +1997,7 @@ class FrequencyMaxTest:
             print(f"Maximum GPU frequency: {self.max_clock}MHz")
             
             # Initialize CUDA resources with compute-focused parameters
+            cp.cuda.Device(device_id).use()
             self.stream = cp.cuda.Stream(non_blocking=True)
             
             # Optimized parameters for maximum frequency
@@ -2084,6 +2070,7 @@ class FrequencyMaxTest:
         """Background computation task"""
         while not self.stop_background:
             try:
+                cp.cuda.Device(self.device_id).use()
                 with self.stream:
                     self.kernel(
                         (self.num_blocks,),
@@ -2152,12 +2139,11 @@ class FrequencyMaxTest:
             print(f"Cleanup error: {e}")
 
 
-def frequency_stress(stop_flag: list, target_percent: float, gpu_index: int, duration: int) -> dict:
+def frequency_stress(target_percent: float, gpu_index: int, duration: int) -> dict:
     """
     Main frequency stress test function that aims to maximize GPU frequency
     
     Args:
-        stop_flag (list): Control flag for test execution
         target_percent (float): Target GPU frequency percentage (ignored in max mode)
         gpu_index (int): GPU device index
         duration (int): Test duration in seconds
@@ -2176,10 +2162,6 @@ def frequency_stress(stop_flag: list, target_percent: float, gpu_index: int, dur
     }
 
     try:
-        try:
-            pynvml.nvmlInit()
-        except:
-            print("NVML already initialized")
             
         handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
         gpu_test = FrequencyMaxTest(gpu_index)
@@ -2193,7 +2175,8 @@ def frequency_stress(stop_flag: list, target_percent: float, gpu_index: int, dur
         
         gpu_test.start_background_task()
         
-        while not stop_flag[0]:
+        stop_flag = False
+        while not stop_flag:
             current_time = time.time()
             elapsed = current_time - start_time
             remaining = max(0, duration - elapsed)
@@ -2388,6 +2371,7 @@ def main():
             sys.stdout = logger
 
         try:
+
             # Print test configuration
             print("\nGPU Stress Test Configuration:")
             print(f"Duration: {args.duration} seconds")
@@ -2399,7 +2383,6 @@ def main():
             # Select test mode and run
             if args.parallel:
                 threads = []
-                shared_stop_flag = [False]
 
                 # Create test function based on mode
                 if args.mode == 'matrix':
@@ -2411,15 +2394,15 @@ def main():
                     )
                 elif args.mode == 'ray':  # Add ray tracing mode
                     test_func = lambda gpu_idx, load: ray_tracing_stress(
-                        [False], load, gpu_idx, args.duration
+                        load, gpu_idx, args.duration
                     )
                 elif args.mode == 'simple':  # simple mode
                     test_func = lambda gpu_idx, load: simple_stress(
-                        [False], load, gpu_idx, args.duration
+                        load, gpu_idx, args.duration
                     )
                 elif args.mode == 'frequency-max':  # Add frequency mode
                     test_func = lambda gpu_idx, load: frequency_stress(
-                        [False], load, gpu_idx, args.duration
+                        load, gpu_idx, args.duration
                     )
 
                 # Start all tests
@@ -2448,17 +2431,16 @@ def main():
                         )
                     elif args.mode == 'ray':  # Add ray tracing mode
                         ray_tracing_stress(
-                            [False], target_load, gpu_idx, args.duration
+                            target_load, gpu_idx, args.duration
                         )
                     elif args.mode == 'simple':
-                        simple_stress(
-                            [False], target_load, gpu_idx, args.duration
-                        )
+                        simple_stress(target_load, gpu_idx, args.duration)
                     elif args.mode == 'frequency-max':  # Add frequency mode
                         frequency_stress(
-                            [False], target_load, gpu_idx, args.duration
+                            target_load, gpu_idx, args.duration
                         )
-
+        except pynvml.NVMLError as e:
+            raise RuntimeError(f"Failed to initialize NVML: {str(e)}")
         finally:
             if logger:
                 sys.stdout = original_stdout
@@ -2468,6 +2450,8 @@ def main():
             except:
                 pass
 
+    except pynvml.NVMLError as e:
+        raise RuntimeError(f"Failed to initialize NVML: {str(e)}")
     except Exception as e:
         print(f"Error during stress test: {e}")
         traceback.print_exc()
